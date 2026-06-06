@@ -63,24 +63,46 @@ class _PromoCardWidgetState extends State<PromoCardWidget>
               filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
               child: Container(
                 decoration: AppTheme.glassDecoration(),
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                child: Stack(
                   children: [
-                    _CardHeader(promo: widget.promo),
-                    const SizedBox(height: 12),
-                    if (widget.promo.descuentoPct != null &&
-                        widget.promo.descuentoPct!.isNotEmpty) ...[
-                      Text(widget.promo.descuentoPct!, style: AppTheme.cardDiscount),
-                      const SizedBox(height: 4),
-                    ],
-                    Text(widget.promo.titulo, style: AppTheme.cardBrandName),
-                    if (widget.promo.descripcion.isNotEmpty) ...[
-                      const SizedBox(height: 6),
-                      Text(widget.promo.descripcion, style: AppTheme.cardBody),
-                    ],
-                    const SizedBox(height: 12),
-                    _CardMeta(promo: widget.promo),
+                    // Discount badge — top right
+                    if (widget.promo.descuentoPct != null)
+                      Positioned(
+                        top: 14,
+                        right: 14,
+                        child: _DiscountBadge(pct: widget.promo.descuentoPct!),
+                      ),
+
+                    // Card content
+                    Padding(
+                      padding: EdgeInsets.fromLTRB(
+                        20,
+                        20,
+                        // extra right padding when badge is present
+                        widget.promo.descuentoPct != null ? 88 : 20,
+                        16,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _CardHeader(promo: widget.promo),
+                          const SizedBox(height: 10),
+                          Text(
+                            widget.promo.titulo,
+                            style: AppTheme.cardBrandName,
+                          ),
+                          if (widget.promo.descripcion.isNotEmpty) ...[
+                            const SizedBox(height: 6),
+                            Text(
+                              widget.promo.descripcion,
+                              style: AppTheme.cardBody,
+                            ),
+                          ],
+                          const SizedBox(height: 12),
+                          _CardMeta(promo: widget.promo),
+                        ],
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -92,21 +114,61 @@ class _PromoCardWidgetState extends State<PromoCardWidget>
   }
 }
 
+// Large cyan % badge
+class _DiscountBadge extends StatelessWidget {
+  final int pct;
+  const _DiscountBadge({required this.pct});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 68,
+      height: 68,
+      decoration: BoxDecoration(
+        color: AppTheme.accent.withOpacity(0.15),
+        shape: BoxShape.circle,
+        border: Border.all(color: AppTheme.accent.withOpacity(0.4), width: 1.5),
+        boxShadow: [
+          BoxShadow(
+            color: AppTheme.accent.withOpacity(0.20),
+            blurRadius: 16,
+            spreadRadius: 0,
+          ),
+        ],
+      ),
+      child: Center(
+        child: Text(
+          '$pct%',
+          style: TextStyle(
+            fontSize: pct >= 100 ? 14 : (pct >= 10 ? 16 : 20),
+            fontWeight: FontWeight.w900,
+            color: AppTheme.accent,
+            letterSpacing: -0.5,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// Header: store name + rubro pill
 class _CardHeader extends StatelessWidget {
   final Promo promo;
-
   const _CardHeader({required this.promo});
 
   @override
   Widget build(BuildContext context) {
     return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         Expanded(
-          child: Text(promo.marca, style: AppTheme.cardBrandName),
+          child: Text(promo.comercio, style: AppTheme.cardBrandName),
         ),
-        if (promo.rubro.isNotEmpty)
+        if (promo.rubro.isNotEmpty) ...[
+          const SizedBox(width: 8),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            padding:
+                const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             decoration: BoxDecoration(
               color: AppTheme.accent.withOpacity(0.12),
               borderRadius: BorderRadius.circular(12),
@@ -117,48 +179,89 @@ class _CardHeader extends StatelessWidget {
             ),
             child: Text(promo.rubro, style: AppTheme.rubroChip),
           ),
+        ],
       ],
     );
   }
 }
 
+// Meta row: banco_billetera, medio_pago, dias, tope, fecha
 class _CardMeta extends StatelessWidget {
   final Promo promo;
-
   const _CardMeta({required this.promo});
 
   @override
   Widget build(BuildContext context) {
     final items = <_MetaItem>[];
 
-    if (promo.medioPago != null && promo.medioPago!.isNotEmpty) {
-      items.add(_MetaItem(icon: Icons.credit_card_outlined, text: promo.medioPago!));
+    // banco_billetera — highlighted in cyan
+    if (promo.bancoBilletera != null && promo.bancoBilletera!.isNotEmpty) {
+      items.add(_MetaItem(
+        icon: Icons.account_balance_wallet_outlined,
+        text: promo.bancoBilletera!,
+        highlighted: true,
+      ));
     }
-    if (promo.dias != null && promo.dias!.isNotEmpty) {
-      items.add(_MetaItem(icon: Icons.calendar_today_outlined, text: promo.dias!));
+
+    // medio_pago — only if different from banco_billetera (case-insensitive)
+    final bp = promo.bancoBilletera?.toLowerCase().trim();
+    final mp = promo.medioPago?.toLowerCase().trim();
+    if (promo.medioPago != null &&
+        promo.medioPago!.isNotEmpty &&
+        mp != bp) {
+      items.add(_MetaItem(
+        icon: Icons.credit_card_outlined,
+        text: promo.medioPago!,
+      ));
     }
+
+    if (promo.diasStr != null && promo.diasStr!.isNotEmpty) {
+      items.add(_MetaItem(
+        icon: Icons.calendar_today_outlined,
+        text: 'Solo: ${promo.diasStr!}',
+      ));
+    }
+
     if (promo.topeReintegro != null && promo.topeReintegro!.isNotEmpty) {
-      items.add(_MetaItem(icon: Icons.attach_money_outlined, text: 'Tope: ${promo.topeReintegro!}'));
+      items.add(_MetaItem(
+        icon: Icons.attach_money_outlined,
+        text: 'Tope: ${promo.topeReintegro!}',
+      ));
     }
+
     if (promo.fechaHasta != null && promo.fechaHasta!.isNotEmpty) {
-      items.add(_MetaItem(icon: Icons.schedule_outlined, text: 'Hasta ${promo.fechaHasta!}'));
+      items.add(_MetaItem(
+        icon: Icons.schedule_outlined,
+        text: 'Hasta ${promo.fechaHasta!}',
+      ));
     }
 
     if (items.isEmpty) return const SizedBox.shrink();
 
     return Wrap(
       spacing: 16,
-      runSpacing: 6,
-      children: items
-          .map((item) => Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(item.icon, size: 13, color: AppTheme.textMuted),
-                  const SizedBox(width: 4),
-                  Text(item.text, style: AppTheme.cardLabel),
-                ],
-              ))
-          .toList(),
+      runSpacing: 8,
+      children: items.map((item) {
+        final color = item.highlighted ? AppTheme.accent : AppTheme.textMuted;
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(item.icon, size: 13, color: color),
+            const SizedBox(width: 4),
+            Text(
+              item.text,
+              style: AppTheme.cardLabel.copyWith(
+                color: item.highlighted
+                    ? AppTheme.accent
+                    : AppTheme.textMuted,
+                fontWeight: item.highlighted
+                    ? FontWeight.w600
+                    : FontWeight.w500,
+              ),
+            ),
+          ],
+        );
+      }).toList(),
     );
   }
 }
@@ -166,6 +269,11 @@ class _CardMeta extends StatelessWidget {
 class _MetaItem {
   final IconData icon;
   final String text;
+  final bool highlighted;
 
-  const _MetaItem({required this.icon, required this.text});
+  const _MetaItem({
+    required this.icon,
+    required this.text,
+    this.highlighted = false,
+  });
 }
