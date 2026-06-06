@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:api.mercadopago.com)",
+      "WebSearch",
+      "WebFetch(domain:merchants.modo.com.ar)",
+      "WebFetch(domain:www.santander.com.ar)",
+      "WebFetch(domain:descuentazo.com.ar)",
+      "WebFetch(domain:beneficios.galicia.ar)",
+      "WebFetch(domain:www.galicia.ar)"
+    ]
+  }
+}

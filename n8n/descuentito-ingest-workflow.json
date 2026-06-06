@@ -1,0 +1,423 @@
+{
+  "name": "Descuentito - MPu",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 6 * * *"
+            }
+          ]
+        }
+      },
+      "id": "6e00f874-049e-4c23-8fbc-a0431ab7a93c",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        512,
+        432
+      ],
+      "notesInFlow": true,
+      "notes": "Corre todos los dias ~06:00 (cron 0 6 * * *)."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "b1a1c0de-0001-4001-8001-000000000001",
+              "name": "banco_billetera",
+              "value": "Mercado Pago",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "4d1d32b2-04a3-4461-be6e-12d1ea4ce4f0",
+      "name": "Config Fuente",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        672,
+        432
+      ],
+      "notesInFlow": true,
+      "notes": "UNICO campo a tocar al clonar para otro banco/billetera. Define banco_billetera (valor FIJO inyectado por este workflow). Ej: 'Mercado Pago', 'Banco Galicia', 'MODO'."
+    },
+    {
+      "parameters": {
+        "functionCode": "// Devuelve las 7 categorias de promociones de Mercado Pago.\n// Cada item dispara una llamada HTTP independiente aguas abajo.\nconst base = 'https://promociones.mercadopago.com.ar/?_sfm_filtro_b=1&_sft_vendedores_category=';\nconst categorias = [\n  { slug: '1apparel', categoria: 'Indumentaria' },\n  { slug: '2electro', categoria: 'Electro' },\n  { slug: '3home', categoria: 'Hogar' },\n  { slug: '4turismo', categoria: 'Turismo' },\n  { slug: '5salud-y-belleza', categoria: 'Salud y Belleza' },\n  { slug: '6alimentos-y-bebidas', categoria: 'Alimentos y Bebidas' },\n  { slug: '7-otros', categoria: 'Otros' }\n];\n\nreturn categorias.map(c => ({ json: { url: base + c.slug, categoria: c.categoria } }));"
+      },
+      "id": "f0a1b2c3-d4e5-4678-9abc-def012345678",
+      "name": "Lista de categorias (Function)",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        896,
+        288
+      ],
+      "notesInFlow": true,
+      "notes": "Emite 7 items, uno por cada categoria de promociones de Mercado Pago. Cada item lleva su url + nombre de categoria."
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "6c99d10e-2fe6-4a72-93ae-5b877442a4c9",
+      "name": "HTTP Request (fuente del comercio)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        432
+      ],
+      "notesInFlow": true,
+      "notes": "URL dinamica por categoria (={{ $json.url }}). Corre 1 vez por cada item de 'Lista de categorias' (7 llamadas). Para anti-bot/JS: apuntar a ScrapingBee/ScraperAPI con render_js=true."
+    },
+    {
+      "parameters": {
+        "functionCode": "// Itera sobre las 7 categorias (un item de HTML por categoria) y\n// devuelve un item de texto limpio por cada una.\nconst out = [];\nfor (const item of $input.all()) {\n  const html = item.json.data ?? item.json.body ?? '';\n\n  const matches = [...html.matchAll(/<h3>(.*?)<\\/h3>|<span>(.*?)<\\/span>|<p>(.*?)<\\/p>|<small>(.*?)<\\/small>/gs)];\n\n  const textoPuro = matches\n    .map(m => (m[1] || m[2] || m[3] || m[4] || '').replace(/<[^>]+>/g, '').trim())\n    .filter(t => t.length > 3 && t.length < 300)\n    .join('\\n');\n\n  const textoLimpio = textoPuro\n    .slice(0, 12000)\n    .replace(/[^\\x00-\\x7FáéíóúÁÉÍÓÚñÑüÜ¡¿.,;:%()\\-\\n\\r ]/g, '');\n\n  out.push({ json: {\n    html_limpio: JSON.stringify(textoLimpio).slice(1, -1),\n    categoria: item.json.categoria ?? null\n  } });\n}\n\nreturn out;"
+      },
+      "id": "404d11c3-cf70-4cf4-b73c-787f08cd631c",
+      "name": "Limpiar HTML (Function)",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        1344,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"gpt-4o-mini\",\n  \"temperature\": 0,\n  \"max_tokens\": 4000,\n  \"messages\": [\n    {\"role\": \"system\", \"content\": \"Sos un extractor de promociones bancarias/billeteras. Recibís texto plano scrapeado de una web de promociones y devolvés SOLO un ARRAY JSON puro (sin markdown, sin ```, sin texto extra).\\n\\nIMPORTANTE: Devolvé un ARRAY JSON con TODAS las promociones de la página, UNA POR CADA COMERCIO. Hay aproximadamente 12 comercios distintos. NO resumas ni devuelvas solo una; incluí todas. Recorré el texto completo de principio a fin y generá un objeto por cada comercio/promo que encuentres.\\n\\nCada elemento del array es una promo con estos campos:\\n- comercio: el lugar donde se compra / donde aplica el descuento (ej: 'Farmacity', 'Mercado Libre', 'YPF', 'Coto', 'Carrefour', 'Dexter'). Es el COMERCIO/cadena, NO el banco ni la billetera.\\n- rubro: categoría del comercio (ej: 'Farmacia', 'Supermercado', 'Indumentaria', 'Combustible', 'Gastronomía').\\n- titulo: título corto de la promo.\\n- descripcion: detalle de la promo en una o dos frases.\\n- descuento_pct: número entero del porcentaje de descuento (ej: 20). null si no hay.\\n- medio_pago: el medio específico mencionado (ej: 'Tarjeta de crédito', 'Pago con QR', 'Tarjeta prepaga'). null si no se aclara.\\n- dias: array de strings con los días en que aplica (ej: ['Lunes','Martes']). null si aplica todos los días o no se aclara.\\n- tope_reintegro: tope de reintegro tal como aparece (ej: '$5000', 'Sin tope'). null si no hay.\\n- fecha_desde: fecha de inicio en formato YYYY-MM-DD. Inferí el AÑO ACTUAL 2026 (hoy es 2026-06-06). Ej: '17 de mayo' => '2026-05-17'. null si no se menciona.\\n- fecha_hasta: fecha de fin en formato YYYY-MM-DD, mismo criterio de año 2026. null si no se menciona.\\n\\nREGLAS:\\n1. NO intentes adivinar ni incluir el banco/billetera: ese dato lo inyecta el workflow aparte. NO agregues ningún campo de banco/marca/entidad.\\n2. El campo se llama 'comercio', nunca 'marca'.\\n3. Devolvé EXCLUSIVAMENTE el array JSON con TODAS las promos (una por comercio). Si no encontrás promos, devolvé [].\"},\n    {\"role\": \"user\", \"content\": \"={{ $json.html_limpio }}\"}\n  ]\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1568,
+        432
+      ],
+      "id": "06c5f62c-6ced-461c-bb32-86db4df81869",
+      "name": "OpenAI - Extraer promos",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PnZ3jL4WJ8dHnBNc",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "function simpleHash(str) {\n  let h = 0;\n  for (let i = 0; i < str.length; i++) {\n    h = Math.imul(31, h) + str.charCodeAt(i) | 0;\n  }\n  return Math.abs(h).toString(16).padStart(8,'0');\n}\n\n// Banco/billetera FIJO inyectado por el workflow (nodo Config Fuente).\nconst banco_billetera = $('Config Fuente').first().json.banco_billetera ?? null;\n\n// Mapa de canonicalizacion de COMERCIOS conocidos.\nconst CANON = {\n  'ypf': 'YPF', 'axion': 'Axion', 'shell': 'Shell',\n  'farmacity': 'Farmacity', 'starbucks': 'Starbucks',\n  'tea connection': 'Tea Connection', 'nike': 'Nike',\n  'adidas': 'Adidas', 'dexter': 'Dexter',\n  'coto': 'Coto', 'carrefour': 'Carrefour', 'jumbo': 'Jumbo',\n  'dia': 'Dia', 'disco': 'Disco', 'vea': 'Vea',\n  'mercado libre': 'Mercado Libre', 'mercadolibre': 'Mercado Libre',\n  'easy': 'Easy', 'garbarino': 'Garbarino', 'fravega': 'Frávega',\n  'musimundo': 'Musimundo', 'rappi': 'Rappi', 'pedidosya': 'PedidosYa'\n};\n\nfunction canonComercio(m) {\n  if (!m) return null;\n  const k = String(m).trim().toLowerCase();\n  return CANON[k] ?? (m.charAt(0).toUpperCase() + m.slice(1));\n}\n\nfunction parseResponse(raw) {\n  const payload = raw.choices?.[0]?.message?.content ?? raw.message?.content ?? raw.text ?? raw.response ?? JSON.stringify(raw);\n  let parsed;\n  try {\n    const stripped = (typeof payload === 'string' ? payload : JSON.stringify(payload))\n      .replace(/^```json\\s*/m, '').replace(/\\s*```\\s*$/m, '').trim();\n    parsed = JSON.parse(stripped);\n  } catch (e) { parsed = { promos: [] }; }\n  return Array.isArray(parsed) ? parsed : (parsed.promos ?? []);\n}\n\n// Itera las 7 respuestas de OpenAI (una por categoria), aplana TODAS las\n// promos en un solo array y deduplica por content_hash.\nconst out = [];\nconst seen = new Set();\nfor (const item of $input.all()) {\n  const promos = parseResponse(item.json);\n\n  for (const p of promos) {\n    const comercio = canonComercio(p.comercio);\n    if (!comercio) continue;\n\n    const dias = Array.isArray(p.dias) ? p.dias : (p.dias ? [p.dias] : null);\n\n    const content = [\n      banco_billetera ? `Banco/Billetera: ${banco_billetera}` : '',\n      `Comercio: ${comercio}`,\n      p.titulo ? `Promo: ${p.titulo}` : '',\n      p.descuento_pct != null ? `Descuento: ${p.descuento_pct}%` : '',\n      p.medio_pago ? `Medio de pago: ${p.medio_pago}` : '',\n      dias ? `Dias: ${dias.join(', ')}` : '',\n      p.tope_reintegro ? `Tope: ${p.tope_reintegro}` : '',\n      p.fecha_hasta ? `Vigente hasta: ${p.fecha_hasta}` : '',\n      p.descripcion ? `Detalle: ${p.descripcion}` : ''\n    ].filter(Boolean).join('. ');\n\n    const hashInput = [\n      banco_billetera ?? '',\n      comercio,\n      p.medio_pago ?? '',\n      p.titulo ?? '',\n      p.fecha_hasta ?? ''\n    ].join('|');\n    const content_hash = simpleHash(hashInput);\n\n    if (seen.has(content_hash)) continue;\n    seen.add(content_hash);\n\n    out.push({ json: {\n      comercio,\n      banco_billetera,\n      rubro: p.rubro ?? null,\n      titulo: p.titulo ?? null,\n      descripcion: p.descripcion ?? null,\n      descuento_pct: p.descuento_pct ?? null,\n      medio_pago: p.medio_pago ?? null,\n      dias,\n      tope_reintegro: p.tope_reintegro ?? null,\n      fecha_desde: p.fecha_desde ?? null,\n      fecha_hasta: p.fecha_hasta ?? null,\n      fuente_url: p.fuente_url ?? null,\n      content,\n      content_hash\n    }});\n  }\n}\n\nreturn out;"
+      },
+      "id": "8bcfd394-1191-411e-988c-d0a9efb98197",
+      "name": "Normalizar + content_hash (Function)",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        1568,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/embeddings",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"text-embedding-3-small\",\n  \"input\": \"={{ $json.content }}\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1792,
+        432
+      ],
+      "id": "fcbde914-312b-45c0-b904-361275517b56",
+      "name": "OpenAI - Embedding",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PnZ3jL4WJ8dHnBNc",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "// Une CADA fila normalizada con SU embedding correspondiente.\nconst normItems = $('Normalizar + content_hash (Function)').all();\nconst embItems = $input.all();\n\nconst out = [];\nfor (let i = 0; i < normItems.length; i++) {\n  const row = normItems[i].json;\n  const emb = embItems[i]?.json ?? {};\n  const embedding = emb.data?.[0]?.embedding ?? emb.embedding ?? emb.vector ?? null;\n  out.push({ json: { ...row, embedding } });\n}\n\nreturn out;"
+      },
+      "id": "30308021-dc26-4f8b-9aa7-0ea4f515c415",
+      "name": "Armar fila final (Function)",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        2016,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://lqvcxguezmvnfwagrftr.supabase.co/rest/v1/promos?on_conflict=content_hash",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "sb_secret_q9_lVr-IR7s6pQWwPat6KQ_OZOO4Yhe"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer sb_secret_q9_lVr-IR7s6pQWwPat6KQ_OZOO4Yhe"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2240,
+        432
+      ],
+      "id": "74f9ad1e-3489-4648-9c9c-5cbc41233086",
+      "name": "Supabase UPSERT",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "DELETE",
+        "url": "=https://lqvcxguezmvnfwagrftr.supabase.co/rest/v1/promos?banco_billetera=eq.{{ $('Config Fuente').first().json.banco_billetera }}&fecha_hasta=lt.{{ new Date().toISOString().split('T')[0] }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "sb_secret_q9_lVr-IR7s6pQWwPat6KQ_OZOO4Yhe"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer sb_secret_q9_lVr-IR7s6pQWwPat6KQ_OZOO4Yhe"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2464,
+        432
+      ],
+      "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "name": "Limpiar promos vencidas"
+    },
+    {
+      "parameters": {
+        "functionCode": "// Placeholder de notificacion de errores.\n// Conectar aqui (rama de error) un nodo de Slack/Email/Telegram para\n// avisar si fallo la ingesta de algun comercio/banco.\nreturn $input.all();"
+      },
+      "id": "9eb05c3b-6212-47f8-af0a-ddacf400aa4c",
+      "name": "Notificar error (placeholder)",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        2560,
+        512
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Ingesta diaria Descuentito\n\n**Arquitectura (extraccion resiliente con LLM, no CSS):**\nSchedule -> Config Fuente -> HTTP (fuente/ScrapingBee) -> Limpiar HTML -> OpenAI extrae JSON -> Normalizar+hash -> Embedding -> Armar fila -> Supabase UPSERT -> Limpiar promos vencidas.\n\n**Modelo COMERCIO + BANCO_BILLETERA:**\n- comercio = donde compras (Farmacity, Mercado Libre). Lo extrae la IA.\n- banco_billetera = con que pagas. Valor FIJO por workflow, inyectado en 'Config Fuente'.\n\n**Para clonar a otro banco tocar SOLO 2 cosas:**\n1. URL del nodo 'HTTP Request (fuente del comercio)'.\n2. Campo banco_billetera del nodo 'Config Fuente'.\n\n- Para anti-bot/JS: usar ScrapingBee/ScraperAPI con render_js=true.\n- content_hash = simpleHash(banco_billetera|comercio|medio_pago|titulo|fecha_hasta) => dedupe.\n- Credenciales: OpenAI + Supabase (configurar en n8n).",
+        "height": 380,
+        "width": 460
+      },
+      "id": "9652f5ee-8253-498f-96bf-2ae7a0281f66",
+      "name": "Nota: arquitectura",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Config Fuente",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config Fuente": {
+      "main": [
+        [
+          {
+            "node": "Lista de categorias (Function)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lista de categorias (Function)": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request (fuente del comercio)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request (fuente del comercio)": {
+      "main": [
+        [
+          {
+            "node": "Limpiar HTML (Function)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Limpiar HTML (Function)": {
+      "main": [
+        [
+          {
+            "node": "OpenAI - Extraer promos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI - Extraer promos": {
+      "main": [
+        [
+          {
+            "node": "Normalizar + content_hash (Function)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar + content_hash (Function)": {
+      "main": [
+        [
+          {
+            "node": "OpenAI - Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI - Embedding": {
+      "main": [
+        [
+          {
+            "node": "Armar fila final (Function)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar fila final (Function)": {
+      "main": [
+        [
+          {
+            "node": "Supabase UPSERT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase UPSERT": {
+      "main": [
+        [
+          {
+            "node": "Limpiar promos vencidas",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notificar error (placeholder)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "de884460-fc6b-4074-9da1-320fa4fac549",
+  "meta": {
+    "instanceId": "12ceb1cb9d261e7b75f21b551e602184f9c950763166a455564e57ff66d64d7e"
+  },
+  "nodeGroups": [],
+  "id": "KYcwpZmPSIjKGENh",
+  "tags": [
+    {
+      "updatedAt": "2026-06-06T03:08:41.557Z",
+      "createdAt": "2026-06-06T03:08:41.557Z",
+      "id": "oowh8VTDsaBXTKei",
+      "name": "descuentito"
+    }
+  ]
+}
